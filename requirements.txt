@@ -1,0 +1,5 @@
+# trader.py (the submission-compatible bot) needs none of this -- stdlib only.
+# These are only for prepare_data.py, backtest.py, run.py and validate.py.
+pandas>=2.0
+numpy>=1.24
+matplotlib>=3.7

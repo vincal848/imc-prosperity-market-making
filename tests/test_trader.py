@@ -1,0 +1,175 @@
+"""Unit tests for trader.py's pricing logic, skew, and state round-trip."""
+import os
+import sys
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
+
+from datamodel import Observation, OrderDepth, TradingState
+import trader as traderModule
+
+
+def make_depth(buys, sells):
+    depth = OrderDepth()
+    depth.buy_orders = dict(buys)
+    depth.sell_orders = dict(sells)
+    return depth
+
+
+def test_microprice_weights_by_the_opposite_sides_volume():
+    # bid 100 x 1, ask 102 x 3 -> heavier ask size pulls the price toward the bid.
+    depth = make_depth({100: 1}, {102: -3})
+    _bidPresent, _askPresent, _mid, microprice = traderModule.bookStats(depth, 0.0)
+    assert microprice == 100.5
+
+
+def test_microprice_falls_back_to_mid_when_volumes_are_equal():
+    depth = make_depth({100: 5}, {102: -5})
+    _bidPresent, _askPresent, mid, microprice = traderModule.bookStats(depth, 0.0)
+    assert mid == 101.0
+    assert microprice == 101.0
+
+
+def test_choose_half_spread_picks_the_distance_that_maximises_rate_times_distance():
+    state = traderModule.RollingState()
+    state.tickWeight = 20.0
+    state.deltaCounts = {3: 9.0}  # tradeRate(3) = 0.45 -> score 1.35, beats every other distance's 0
+    assert traderModule.chooseHalfSpread(state) == 3
+
+
+def test_choose_half_spread_falls_back_to_a_decaying_default_when_data_is_sparse():
+    state = traderModule.RollingState()
+    state.tickWeight = 5.0  # below the 20-tick warmup threshold
+    # tradeRate(d) = 0.01 * exp(-0.2 d); score(d) = d * tradeRate(d) peaks at d=5 (1/0.2)
+    assert traderModule.chooseHalfSpread(state) == 5
+
+
+def _rolling_state_with_sigma(sigma, distance=2, rate=0.5):
+    state = traderModule.RollingState()
+    # 20 alternating +-sigma returns give a sample stdev of exactly sigma.
+    for i in range(20):
+        state.returns.append(sigma if i % 2 == 0 else -sigma)
+    state.tickWeight = 20.0
+    state.deltaCounts = {distance: rate * 20.0}
+    return state
+
+
+def test_inventory_skew_is_positive_for_a_long_position_and_negative_for_a_short_one():
+    state = _rolling_state_with_sigma(sigma=1.0)
+    halfSpread = traderModule.chooseHalfSpread(state)
+    longSkew = traderModule.inventorySkew(10, state, horizon=1000, halfSpread=halfSpread)
+    shortSkew = traderModule.inventorySkew(-10, state, horizon=1000, halfSpread=halfSpread)
+    assert longSkew > 0
+    assert shortSkew < 0
+    assert shortSkew == -longSkew
+
+
+def test_inventory_skew_is_zero_at_zero_position():
+    state = _rolling_state_with_sigma(sigma=1.0)
+    halfSpread = traderModule.chooseHalfSpread(state)
+    assert traderModule.inventorySkew(0, state, horizon=1000, halfSpread=halfSpread) == 0.0
+
+
+def test_inventory_skew_clamps_to_max_skew_ticks_for_a_large_position():
+    state = _rolling_state_with_sigma(sigma=50.0)  # deliberately huge vol to force the clamp
+    halfSpread = traderModule.chooseHalfSpread(state)
+    skew = traderModule.inventorySkew(80, state, horizon=1000, halfSpread=halfSpread)
+    assert skew == traderModule.maxSkewTicks
+
+
+def test_rolling_state_to_dict_from_dict_round_trip():
+    state = traderModule.RollingState()
+    state.observe(mid=10000.0, microprice=10001.0, bidPresent=True, askPresent=True, tradePrices=[9998, 10003])
+    state.observe(mid=10002.0, microprice=10002.5, bidPresent=True, askPresent=True, tradePrices=[10002])
+    state.updateVolShock()
+
+    restored = traderModule.RollingState.fromDict(state.toDict())
+
+    assert list(restored.mids) == list(state.mids)
+    assert list(restored.returns) == list(state.returns)
+    assert restored.deltaCounts == state.deltaCounts
+    assert restored.tickWeight == state.tickWeight
+    assert restored.totalTicks == state.totalTicks
+    assert restored.volShockTicks == state.volShockTicks
+    assert restored.lastMid == state.lastMid
+    assert restored.lastFairValue == state.lastFairValue
+
+
+def test_fair_value_clamp_rounds_to_nearest_tick_not_truncated():
+    # fairValue=10003.9 should clamp the bid ceiling at round(10003.9)=10004.
+    # The bug fixed here used int(fairValue), which truncates to 10003 instead
+    # (see legacy/TraderC1.py's docstring, defect 1). A large short position
+    # pushes the reservation price up enough that the clamp actually binds,
+    # so this test would fail against the truncating version of the clamp.
+    state = traderModule.RollingState()
+    state.lastFairValue = 10003.9
+    state.tickWeight = 100.0  # past warmup so chooseHalfSpread/tradeRate are deterministic
+
+    strategy = traderModule.AshStrategy()
+    quotes = strategy.decide(state, mid=10003.9, position=-80, bidPresent=True, askPresent=True)
+
+    bidQuotes = [price for price, quantity in quotes if quantity > 0]
+    assert bidQuotes == [10004]
+
+
+def test_strategy_never_requests_more_size_than_room_to_the_position_limit():
+    state = traderModule.RollingState()
+    state.lastFairValue = 10000.0
+    state.tickWeight = 50.0
+
+    strategy = traderModule.AshStrategy()
+    for position in (-80, -79, -1, 0, 1, 79, 80):
+        quotes = strategy.decide(state, mid=10000.0, position=position, bidPresent=True, askPresent=True)
+        for _price, quantity in quotes:
+            resulting = position + quantity
+            assert -traderModule.positionLimit <= resulting <= traderModule.positionLimit
+
+
+def test_vol_shock_widens_the_half_spread_and_shrinks_size():
+    calm = traderModule.RollingState()
+    calm.lastFairValue = 10000.0
+    calm.tickWeight = 100.0
+    calm.deltaCounts = {2: 50.0}
+    calm.volShockTicks = 0
+
+    shocked = traderModule.RollingState()
+    shocked.lastFairValue = 10000.0
+    shocked.tickWeight = 100.0
+    shocked.deltaCounts = {2: 50.0}
+    shocked.volShockTicks = 3  # at/above the volMultiplier threshold
+
+    strategy = traderModule.AshStrategy()
+    calmQuotes = strategy.decide(calm, mid=10000.0, position=0, bidPresent=True, askPresent=True)
+    shockedQuotes = strategy.decide(shocked, mid=10000.0, position=0, bidPresent=True, askPresent=True)
+
+    calmBid, calmAsk = sorted(price for price, _quantity in calmQuotes)
+    shockedBid, shockedAsk = sorted(price for price, _quantity in shockedQuotes)
+    assert (shockedAsk - shockedBid) > (calmAsk - calmBid)
+
+    calmSize = max(abs(quantity) for _price, quantity in calmQuotes)
+    shockedSize = max(abs(quantity) for _price, quantity in shockedQuotes)
+    assert shockedSize < calmSize
+
+
+def test_trader_run_never_proposes_an_order_that_alone_would_breach_the_position_limit():
+    depth = make_depth({9999: 10}, {10001: 10})
+    for symbol, position in (
+        ("ASH_COATED_OSMIUM", 80),
+        ("ASH_COATED_OSMIUM", -80),
+        ("INTARIAN_PEPPER_ROOT", 80),
+        ("INTARIAN_PEPPER_ROOT", -80),
+    ):
+        state = TradingState(
+            traderData="",
+            timestamp=0,
+            listings={},
+            order_depths={symbol: depth},
+            own_trades={},
+            market_trades={},
+            position={symbol: position},
+            observations=Observation({}, {}),
+        )
+        orders, _conversions, _traderData = traderModule.Trader().run(state)
+        for order in orders.get(symbol, []):
+            resulting = position + order.quantity
+            assert -traderModule.positionLimit <= resulting <= traderModule.positionLimit

@@ -1,3 +1,17 @@
+"""SUPERSEDED. Kept for reference only -- this file is not part of the package and is known to be incorrect.
+
+1. The half spread is a hardcoded constant (ashBaseHalfSpread=2) that never
+   widens under realized volatility -- it quotes the same 2-tick half spread
+   in calm and volatile stretches alike. trader.py's AshStrategy instead
+   widens the half spread 1.5x once a vol shock is detected. Pinned by
+   tests/test_trader.py::test_vol_shock_widens_the_half_spread_and_shrinks_size.
+2. zScore() computes the z-score of the current fair value against a window
+   that includes that same current value (recent[-1] is both the point being
+   scored and part of the mean/stdev it is scored against), which damps the
+   z-score exactly when a real jump would make it most informative.
+
+Replaced by trader.py (AshStrategy).
+"""
 from datamodel import TradingState, Order
 from dataclasses import dataclass, field
 from collections import deque

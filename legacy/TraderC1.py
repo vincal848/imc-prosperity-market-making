@@ -1,3 +1,19 @@
+"""SUPERSEDED. Kept for reference only -- this file is not part of the package and is known to be incorrect.
+
+1. The bid/ask clamps against fair value use int(fairValue), which truncates
+   toward zero instead of rounding to the nearest tick. Fair value is almost
+   always fractional (a microprice or mid average), so this silently biases
+   both the maximum bid and the minimum ask down by up to one tick on nearly
+   every tick where the clamp binds. Pinned by
+   tests/test_trader.py::test_fair_value_clamp_rounds_to_nearest_tick_not_truncated.
+2. chooseHalfSpread(state) is recomputed from scratch a second time inside
+   inventorySkew on every decide() call -- it is a pure function of state
+   that does not change in between, so this doubles the O(maxDelta) scan for
+   no behavioral difference. Output-equivalent, not separately pinned; see
+   tests/test_trader.py::test_inventory_skew_sign_and_clamp.
+
+Replaced by trader.py (same strategy, these two issues fixed/cleaned up).
+"""
 from datamodel import TradingState, Order
 from dataclasses import dataclass, field
 from collections import deque

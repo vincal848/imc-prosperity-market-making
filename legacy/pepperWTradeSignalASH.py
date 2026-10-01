@@ -1,3 +1,15 @@
+"""SUPERSEDED. Kept for reference only -- this file is not part of the package and is known to be incorrect.
+
+1. The filename claims a trade signal from ASH feeds into the Pepper quote,
+   but makePepperOrders only ever reads Pepper's own ProductState -- there is
+   no reference to Ash anywhere in the Pepper order path, so the name is
+   misleading and no such signal exists. Pinned by
+   tests/test_legacy.py::test_pepper_w_trade_signal_ash_never_reads_the_ash_state.
+
+Replaced by trader.py (PepperStrategy's fairValueShift/extraSpread use
+Pepper's own short-window drift instead of a nonexistent cross-product
+signal; AshStrategy covers the Ash side separately).
+"""
 from datamodel import TradingState, Order
 from dataclasses import dataclass, field
 from collections import deque
@@ -7,8 +19,11 @@ import json
 positionLimit = 80
 
 pepperQuoteSize = 10
-pepperFallbackValue = 12474
+pepperFairValue = 12474
 pepperBaseHalfSpread = 1
+
+ashQuoteSize = 4
+ashBaseHalfSpread = 3
 
 rollingWindow = 120
 
@@ -92,15 +107,45 @@ def getBookStats(depth, fallbackFairValue):
 
 
 def makePepperOrders(product, depth, productState, position):
-    bidPresent, askPresent, mid, microprice = getBookStats(depth, productState.fairValue(pepperFallbackValue))
+    bidPresent, askPresent, mid, microprice = getBookStats(depth, pepperFairValue)
     productState.observe(mid, microprice, bidPresent, askPresent)
 
-    fairValue = productState.fairValue(pepperFallbackValue)
+    fairValue = pepperFairValue
     lean = inventoryLean(position)
     reservationPrice = fairValue - lean
 
     bidPrice = int(round(reservationPrice - pepperBaseHalfSpread))
-    askPrice = max(bidPrice + 1, int(round(reservationPrice + pepperBaseHalfSpread)))
+    askPrice = int(round(reservationPrice + pepperBaseHalfSpread))
+
+    roomToBuy = max(0, positionLimit - position)
+    roomToSell = max(0, positionLimit + position)
+
+    orders = []
+
+    if roomToBuy > 0:
+        buySize = min(pepperQuoteSize, roomToBuy)
+        orders.append(Order(product, bidPrice, buySize))
+
+    if roomToSell > 0:
+        sellSize = min(pepperQuoteSize, roomToSell)
+        orders.append(Order(product, askPrice, -sellSize))
+
+    return orders
+
+
+def makeAshOrders(product, depth, productState, position):
+    bidPresent, askPresent, mid, microprice = getBookStats(depth, productState.fairValue(0.0))
+    productState.observe(mid, microprice, bidPresent, askPresent)
+
+    fairValue = productState.fairValue(mid)
+    if fairValue <= 0:
+        return []
+
+    lean = inventoryLean(position)
+    reservationPrice = fairValue - lean
+
+    bidPrice = int(round(reservationPrice - ashBaseHalfSpread))
+    askPrice = max(bidPrice + 1, int(round(reservationPrice + ashBaseHalfSpread)))
 
     roomToBuy = max(0, positionLimit - position)
     roomToSell = max(0, positionLimit + position)
@@ -108,11 +153,11 @@ def makePepperOrders(product, depth, productState, position):
     orders = []
 
     if bidPresent and roomToBuy > 0:
-        buySize = min(pepperQuoteSize, roomToBuy)
+        buySize = min(ashQuoteSize, roomToBuy)
         orders.append(Order(product, bidPrice, buySize))
 
     if askPresent and roomToSell > 0:
-        sellSize = min(pepperQuoteSize, roomToSell)
+        sellSize = min(ashQuoteSize, roomToSell)
         orders.append(Order(product, askPrice, -sellSize))
 
     return orders
@@ -128,13 +173,14 @@ class Trader:
         result = {}
 
         for product, depth in state.order_depths.items():
-            if product != "INTARIAN_PEPPER_ROOT":
-                continue
-
             productState = ProductState.fromDict(stateBlob[product]) if product in stateBlob else ProductState()
             position = state.position.get(product, 0)
 
-            result[product] = makePepperOrders(product, depth, productState, position)
+            if product == "INTARIAN_PEPPER_ROOT":
+                result[product] = makePepperOrders(product, depth, productState, position)
+
+            elif product == "ASH_COATED_OSMIUM":
+                result[product] = makeAshOrders(product, depth, productState, position)
 
             stateBlob[product] = productState.toDict()
 

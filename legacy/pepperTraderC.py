@@ -1,3 +1,18 @@
+"""SUPERSEDED. Kept for reference only -- this file is not part of the package and is known to be incorrect.
+
+1. Fair value is hardcoded to pepperFairValue=12474 and never updated from
+   the live book, even though PepperState.observe() tracks a live
+   microprice-based fair value every tick -- `fairValue = pepperFairValue`
+   ignores `pepperState.fairValue()` entirely. Pinned by
+   tests/test_legacy.py::test_pepper_trader_c_ignores_its_own_tracked_fair_value.
+2. Places both a buy and a sell order on every tick regardless of whether
+   that side of the book is present -- the roomToBuy/roomToSell checks are
+   not gated on bidPresent/askPresent, unlike every other trader in this
+   repo. Pinned by
+   tests/test_legacy.py::test_pepper_trader_c_quotes_both_sides_even_when_a_book_side_is_empty.
+
+Replaced by trader.py (PepperStrategy).
+"""
 from datamodel import TradingState, Order
 from dataclasses import dataclass, field
 from collections import deque

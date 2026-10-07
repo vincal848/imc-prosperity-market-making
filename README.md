@@ -1,6 +1,6 @@
 # OpporCode
 
-[![tests](https://github.com/vincal848/OpporCode/actions/workflows/tests.yml/badge.svg)](https://github.com/vincal848/OpporCode/actions/workflows/tests.yml)
+[![tests](https://github.com/vincal848/imc-prosperity-market-making/actions/workflows/tests.yml/badge.svg)](https://github.com/vincal848/imc-prosperity-market-making/actions/workflows/tests.yml)
 
 This project came out of IMC Prosperity 2026 Round 1, a two-product market-making
 round (ASH_COATED_OSMIUM and INTARIAN_PEPPER_ROOT, position limit 80). Across

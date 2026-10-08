@@ -35,3 +35,19 @@ variant, selection by stressed day-0 Ash PnL, ties keep the earlier setting:
 
 "Beats the baseline" = higher Ash PnL than the fixed-value MM baseline on both
 test days under both fill models. Otherwise the README says so.
+
+## Amendment (committed before any protocol-2 variant ran)
+
+Measured while writing the code, on signal-free data only: the detrended
+day-0 Pepper series is bounded, so its |t| p99 is 0.06 and `cal` collapses to
+the 2.0 floor. But on a simulated i.i.d. random-walk null (30,000 ticks, 1,000
+seeded paths) |t| > 2 is hit at some tick 40% of the time, so 2.0 is not a null
+the regime switch can claim to pass. Added:
+
+- a third threshold, **rw99 = 3.7**, the 99th percentile of the running-max |t|
+  of that random-walk null;
+- an eligibility rule: a threshold whose false-engagement rate on the random-walk
+  null exceeds 5% is **ineligible** for selection, whatever its day-0 PnL.
+  Ties among eligible variants keep the earlier (overlay 0).
+
+Total new Part-1 variants: 3 thresholds x 2 overlays = 6.

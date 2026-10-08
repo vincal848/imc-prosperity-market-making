@@ -41,10 +41,8 @@ rollingWindow = 500
 shortWindow = 50
 maxDelta = 15
 maxSkewTicks = 4
-trendLookback = 500  # ticks of history behind the drift t-stat
-trendThreshold = 0.5  # |t| above this -> trend mode; float("inf") disables it
+trendThreshold = 2.0  # |t| above this -> trend mode; float("inf") disables it
 overlay = 0  # in trend mode, market-make only within this many units of the +/-limit core
-trendSamples = 40
 
 
 @dataclass
@@ -52,7 +50,7 @@ class RollingState:
     mids: deque = field(default_factory=lambda: deque(maxlen=rollingWindow))
     returns: deque = field(default_factory=lambda: deque(maxlen=rollingWindow))
     returnsShort: deque = field(default_factory=lambda: deque(maxlen=shortWindow))
-    samples: deque = field(default_factory=lambda: deque(maxlen=trendSamples))
+    firstMid: float = 0.0
     deltaCounts: dict = field(default_factory=dict)
 
     tickWeight: float = 0.0
@@ -85,9 +83,8 @@ class RollingState:
                 if 0 <= distance <= maxDelta:
                     self.deltaCounts[distance] = self.deltaCounts.get(distance, 0.0) + 1.0
 
-        step = max(1, trendLookback // trendSamples)
-        if mid > 0 and self.totalTicks % step == 0:
-            self.samples.append(mid)
+        if self.firstMid == 0.0:
+            self.firstMid = mid
 
         if self.totalTicks % 500 == 0:
             self.tickWeight *= 0.5
@@ -138,11 +135,14 @@ class RollingState:
         return recent[-1] - recent[0]
 
     def trendStat(self) -> float:
-        """t-stat of the drift over ~trendLookback ticks, assuming i.i.d. per-tick changes."""
-        if len(self.samples) < trendSamples or self.lastMid <= 0:
+        """t-stat of the drift since the first tick, assuming i.i.d. per-tick changes.
+
+        ponytail: expanding window, so a regime change late in a long run is detected slowly;
+        upgrade to a rolling window if the data ever spans regimes.
+        """
+        if self.totalTicks < 500 or self.lastMid <= 0:
             return 0.0
-        span = (trendSamples - 1) * max(1, trendLookback // trendSamples)
-        return (self.lastMid - self.samples[0]) / (max(self.sigma(), 0.1) * math.sqrt(span))
+        return (self.lastMid - self.firstMid) / (max(self.sigma(), 0.1) * math.sqrt(self.totalTicks))
 
     def trendTarget(self) -> int:
         """+/-positionLimit when the drift is significant, else 0 (plain market making)."""
@@ -155,7 +155,7 @@ class RollingState:
 
     def toDict(self):
         return {
-            "samples": list(self.samples),
+            "firstMid": self.firstMid,
             "mids": list(self.mids),
             "returns": list(self.returns),
             "returnsShort": list(self.returnsShort),
@@ -173,7 +173,7 @@ class RollingState:
         state.mids = deque(data.get("mids", []), maxlen=rollingWindow)
         state.returns = deque(data.get("returns", []), maxlen=rollingWindow)
         state.returnsShort = deque(data.get("returnsShort", []), maxlen=shortWindow)
-        state.samples = deque(data.get("samples", []), maxlen=trendSamples)
+        state.firstMid = float(data.get("firstMid", 0.0))
         state.deltaCounts = {int(k): float(v) for k, v in data.get("deltaCounts", {}).items()}
         state.tickWeight = float(data.get("tickWeight", data.get("totalTicks", 0.0)))
         state.totalTicks = int(data.get("totalTicks", 0))

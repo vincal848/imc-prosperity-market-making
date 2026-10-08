@@ -2,6 +2,8 @@
 import os
 import sys
 
+import pytest
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
@@ -183,14 +185,49 @@ def feed(mids):
 
 
 def test_trend_target_follows_a_steady_drift_and_ignores_a_flat_series():
-    n = 1000
+    n = 5000
     noise = [(-1) ** i for i in range(n)]
-    assert feed([10000 + 0.1 * i + noise[i] for i in range(n)]).trendTarget() == traderModule.positionLimit
-    assert feed([10000 - 0.1 * i + noise[i] for i in range(n)]).trendTarget() == -traderModule.positionLimit
+    assert feed([10000 + 0.2 * i + noise[i] for i in range(n)]).trendTarget() == traderModule.positionLimit
+    assert feed([10000 - 0.2 * i + noise[i] for i in range(n)]).trendTarget() == -traderModule.positionLimit
     assert feed([10000 + noise[i] for i in range(n)]).trendTarget() == 0
 
 
 def test_in_trend_mode_the_trader_crosses_the_book_to_rebuild_the_core():
-    state = feed([10000 + 0.1 * i + (-1) ** i for i in range(1000)])
-    quotes = traderModule.strategies["INTARIAN_PEPPER_ROOT"].decide(state, 10100.0, 0, True, True, 10099, 10101)
-    assert quotes == [(10101, traderModule.positionLimit)]
+    state = feed([10000 + 0.2 * i + (-1) ** i for i in range(5000)])
+    quotes = traderModule.strategies["INTARIAN_PEPPER_ROOT"].decide(state, 11000.0, 0, True, True, 10999, 11001)
+    assert quotes == [(11001, traderModule.positionLimit)]
+
+
+def engagements(threshold, seeds=range(5), ticks=10000):
+    """Number of zero-drift random-walk paths (Pepper-like vol) on which trend mode ever switches on."""
+    import numpy as np
+    old, traderModule.trendThreshold = traderModule.trendThreshold, threshold
+    try:
+        hits = 0
+        for seed in seeds:
+            walk = 10000 + np.cumsum(np.random.default_rng(seed).normal(0, 2.8, ticks))
+            state = traderModule.RollingState()
+            engaged = False
+            for mid in walk:
+                state.observe(mid, mid, True, True, [])
+                engaged = engaged or state.trendTarget() != 0
+            hits += engaged
+        return hits
+    finally:
+        traderModule.trendThreshold = old
+
+
+def test_trend_mode_does_not_engage_on_a_driftless_random_walk_but_the_old_threshold_did():
+    assert engagements(traderModule.trendThreshold) == 0
+    assert engagements(0.5) > 0  # the day-0-tuned 0.5 threshold failed the null
+
+
+@pytest.mark.skipif(not os.path.exists(os.path.join(ROOT, "cleaned", "pepperPrices.csv")),
+                    reason="cleaned/pepperPrices.csv not generated")
+def test_trend_mode_does_not_engage_on_linearly_detrended_pepper():
+    import backtest
+    import checks
+    prices, trades = backtest.load_product("INTARIAN_PEPPER_ROOT")
+    flat, flatTrades = checks.detrended(prices, trades)
+    records = backtest.Backtester(traderModule.Trader(), "INTARIAN_PEPPER_ROOT", prices=flat, trades=flatTrades).run()
+    assert records["position"].abs().max() < 70

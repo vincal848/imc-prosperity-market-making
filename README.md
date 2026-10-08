@@ -16,12 +16,13 @@ backtester so the strategy's actual numbers are honest rather than assumed.
 ****The headline finding is not flattering, and it got less flattering once the
 comparison was made honest: on INTARIAN_PEPPER_ROOT a correct hold-to-the-limit
 baseline earns 239,471 XIRECS over the round versus 10,398 for the symmetric
-market maker (the earlier 26,955 baseline only ever held 9 units -- a bug).** A
-trend mode that I selected on day 0 only (below) reaches 235,913: it ties the
-baseline on day 1 and loses to it on day 2, so **nothing here beats hold-to-limit
-on Pepper out of sample.** The market maker still beats a fixed-fair-value
-baseline on ASH_COATED_OSMIUM over the round (24,176 vs. 20,986), but loses to it
-on day 1 and does not survive a stricter fill model (see Checks).
+market maker (the earlier 26,955 baseline only ever held 9 units -- a bug).**
+Nothing here beats hold-to-limit on Pepper: a null-calibrated regime switch
+reaches 153,106 because it needs evidence before it commits, and it ties the
+baseline only on day 2. On ASH_COATED_OSMIUM, a market maker re-tuned on day 0
+under stressed fills beats the fixed-value baseline on both test days under
+both fill models (but it is a mean-reversion bet: it loses badly on a
+random-walk version of Ash, see Checks).
 
 ![Pepper mid price across the corrected day order, and PnL: rebuilt trader vs. buy-and-hold](docs/img/pepper_price_and_pnl.png)
 *Top: Pepper's mid price across all three days once the day labels are fixed -- one continuous
@@ -36,66 +37,83 @@ to the limit and holding beats the rebuilt market maker's PnL curve for the whol
 | **Methods** | Avellaneda-Stoikov-style inventory skew, empirical fill-rate-weighted half spread, vol-shock spread widening, short-window drift fair-value shift |
 | **Inputs** | `cleaned/*.csv` -- 3 days x 10,000 ticks x 2 products of IMC Prosperity order book snapshots and trades |
 | **Outputs** | `trader.py` (submission-ready), per-tick/per-day mark-to-market PnL |
-| **Validation** | 35 pytest tests: pricing formulas, skew sign/clamp, state round-trip, position-limit compliance, backtester fill/limit invariants, day-ordering correctness |
-| **Headline result** | No edge over honest baselines: hold-to-limit (239,471) beats every Pepper strategy tried out of sample; the Ash MM beats its baseline over the round but not on day 1 or under stricter fills |
+| **Validation** | 37 pytest tests: pricing formulas, skew sign/clamp, state round-trip, position-limit compliance, backtester fill/limit invariants, day-ordering correctness |
+| **Headline result** | Hold-to-limit (239,471) beats every Pepper strategy tried out of sample; the Ash MM re-tuned on day 0 under stressed fills beats its fixed-value baseline on both test days under both fill models, but is a mean-reversion bet |
 | **Stack** | Python 3.13, stdlib only for `trader.py`; pandas/numpy/matplotlib for backtest/analysis |
 
 ## Results
 
 Two backtester fixes changed the numbers: the trader now sees the *previous*
-tick's trades while resting quotes fill against the *current* tick's (it used
-to see and fill against the same prints), and the buy-and-hold baseline now
-buys every tick until position 80 (it used to buy once and end at 9 units).
-Each has a test that fails without it. Per-day PnL (XIRECS), corrected:
+tick's trades while resting quotes fill against the *current* tick's, and the
+buy-and-hold baseline now buys every tick until position 80 (it used to buy
+once and end at 9 units). Each has a test that fails without it.
 
-| product | strategy | day 0 | day 1 | day 2 | total |
+**Protocols.** [`docs/PROTOCOL.md`](docs/PROTOCOL.md) (19 variants) and
+[`docs/PROTOCOL-2.md`](docs/PROTOCOL-2.md) (20 more: 6 Pepper regime-switch
+variants, 14 Ash market-maker variants) were each committed before their
+experiments: tune on **day 0 only**, score days 1 and 2 once. **Total variants
+tried: 39.** `python walkforward.py tune` reproduces the day-0 search and writes
+`docs/tuned.json`; `python walkforward.py test` produces the tables below.
+Stressed fills = passive fills at 50% of printed quantity, strictly-through
+prints only; the Ash MM was tuned under them.
+
+### Pepper (per-day PnL, XIRECS)
+
+| strategy | fills | day 0 | day 1 | day 2 | total |
 |---|---|---:|---:|---:|---:|
-| ASH_COATED_OSMIUM | original market maker | 8,018 | 8,356 | 7,802 | 24,176 |
-| ASH_COATED_OSMIUM | fixed-value MM baseline (10000 +/- 2) | 6,523 | 8,381 | 6,082 | 20,986 |
-| INTARIAN_PEPPER_ROOT | original market maker (trend mode off) | 3,020.5 | 4,105.5 | 3,272 | 10,398 |
-| INTARIAN_PEPPER_ROOT | hold-to-limit baseline | 79,591 | 79,720 | 80,160 | 239,471 |
-| INTARIAN_PEPPER_ROOT | trend mode, day-0 pick (500, 0.5, 0) | 76,099 | 79,720 | 80,094 | 235,913 |
+| hold-to-limit | either | 79,591 | 79,720 | 80,160 | 239,471 |
+| regime switch, \|t\| > 3.7, no overlay (day-0 pick) | normal | 8,273 | 64,673 | 80,160 | 153,106 |
+| regime switch (same) | stressed | 10,978.5 | 69,927.5 | 80,160 | 161,066 |
+| original market maker (switch off) | normal | 3,020.5 | 4,105.5 | 3,272 | 10,398 |
 
-(Before the fixes: original MM 25,262 / 11,076; buy-and-hold 26,955.) Ash is
-identical with trend mode on, since it never engages there.
+Out of sample the switch loses day 1 by 15,047 and ties day 2 exactly. The
+regime statistic is an expanding-window drift t-stat; the threshold 3.7 is the
+99th percentile of its running maximum on a driftless random walk (a threshold
+of 2 is hit by a random walk 40% of the time, so it was ineligible). The price of
+a false-alarm rate of 1% is waiting ~15,000 ticks (into day 1) for Pepper's t-stat
+to cross it.
 
-### Walk-forward protocol and out-of-sample result
+**Hold-to-limit is the ceiling for a monotone drift under an 80-unit cap.**
+Pepper rises ~2,993 points over the round (239,471 / 80). With position bounded
+by 80, drift PnL is at most 80 x 2,993 = 239,440 whatever the strategy; every
+tick spent below 80 forgoes 0.1 points/tick/unit (~0.1 x 80 = 8 per tick), and a
+round trip against the spread (~12 points) only pays if the unit is re-bought
+within ~120 ticks. The overlay variants (band 10) were worse on day 0. The only
+thing a smarter strategy could add is knowing the regime earlier, which needs a
+prior (hard-coding the symbol) or data we do not have. So the regime switch is
+kept only to route Pepper to the +/-80 core and Ash to market making.
 
-The protocol is in [`docs/PROTOCOL.md`](docs/PROTOCOL.md) and was committed
-before any new strategy ran: tune on **day 0 only**, then score days 1 and 2
-once. `python walkforward.py tune` tried **19 variants** (original MM plus
-lookback {500, 1000, 2000} x drift t-stat threshold {0.5, 1.0, 1.5} x MM-overlay
-band {0, 10}); the day-0 winner was lookback 500, threshold 0.5, overlay 0 (a
-+/-80 core with no market making). Day-0 PnL of every variant is in
-`python walkforward.py tune`'s output; the overlay variants were uniformly
-worse than no overlay.
+### Ash (per-day PnL, XIRECS)
 
-| out of sample | day 1 | day 2 |
-|---|---:|---:|
-| Pepper: trend mode (day-0 pick) | 79,720 | 80,094 |
-| Pepper: hold-to-limit | 79,720 | 80,160 |
-| Ash: market maker | 8,356 | 7,802 |
-| Ash: fixed-value baseline | 8,381 | 6,082 |
+| strategy | fills | day 0 | day 1 | day 2 | total |
+|---|---|---:|---:|---:|---:|
+| fixed-value MM (10000 +/- 2) | normal | 6,523 | 8,381 | 6,082 | 20,986 |
+| original learned MM | normal | 8,018 | 8,356 | 7,802 | 24,176 |
+| **re-tuned MM** (day-0 pick) | normal | 8,996 | 11,670 | 9,572 | 30,238 |
+| fixed-value MM | stressed | 4,416 | 6,242 | 4,499 | 15,157 |
+| original learned MM | stressed | 2,221.5 | 2,329.5 | 2,244 | 6,795 |
+| **re-tuned MM** (day-0 pick) | stressed | 5,569.5 | 8,385.5 | 5,754 | 19,709 |
 
-**Verdict.** On Pepper the trend mode ties on day 1 and is 66 behind on day 2:
-it does not beat hold-to-limit, and cannot -- the position is capped at 80, so
-the drift is already fully captured by the baseline; the 3,492 shortfall on day 0
-is just the lookback warm-up before the trend is detected. On Ash the market
-maker wins day 2 by 1,720 but loses day 1 by 25. No edge over the honest
-baselines yet.
+The day-0 pick (by stressed day-0 Ash PnL, coordinate descent): half spread 3
+(not learned), inventory skew unchanged, fair value = mean of the last 500 mids
+(anchor weight 1.0), take the book when it is 2 ticks through fair value, size
+20. It beats the fixed-value baseline on both test days under **both** fill
+models. The original learned MM did not survive the stressed model.
 
-### Checks (`python checks.py`)
+### Checks (`python checks.py`; tests in `tests/test_trader.py`)
 
 | check | result |
 |---|---|
-| null: linearly detrended Pepper -> trend mode should not engage | **FAILS.** With threshold 0.5 the trader sits at \|position\| >= 70 on 99% of ticks and ends at -80 (pnl 738). A 0.5 t-stat is not a significance level; the day-0 pick was never null-calibrated. |
-| placebo: Pepper mirrored (prices negated) | Passes: goes to -80, earns 235,913 (symmetric), min position -80, no blow-up; hold-to-limit loses 240,511 on the same data. |
-| fill stress: passive fills at 50% of printed quantity, strictly-through prints only | Pepper unchanged (the baseline and trend mode cross the book): 75,952 / 79,720 / 80,160 vs. 79,591 / 79,720 / 80,160. **Ash MM falls to 2,221 / 2,330 / 2,244 per day, below the fixed-value baseline's 4,416 / 6,242 / 4,499** -- its edge depends on generous passive fills. |
+| null: linearly detrended Pepper | Passes: position never exceeds 13. **Correction:** the first version of this check shifted the book but not the trades, which made the market maker run to -80 and was misreported as the trend mode engaging; the trades are now shifted too, and the old 0.5-threshold configuration also passes this null. |
+| null: driftless random walk (5 seeded paths x 10,000 ticks) | The old 0.5 threshold engages; the 3.7 threshold never does. This is the test that fails with the old threshold. |
+| placebo: Pepper mirrored | Goes to -80, earns 153,106 (symmetric), no blow-up; hold-to-limit loses 240,511. |
+| fill stress | Pepper unchanged for hold-to-limit; see tables for the Ash MM. |
+| null for the Ash MM: shuffled-increment random-walk Ash | **The re-tuned MM loses 211,673** (fixed-value baseline +22,141). Its edge is a bet that Ash mean-reverts; the regime switch only tests for drift, not for mean reversion. |
 
-Next hypothesis: pick the threshold from a signal-free calibration (e.g. the
-detrended series' own t-stat distribution, |t| > ~2) rather than from day-0 PnL,
-and re-test with a fresh protocol; with 3 days of one trending path this may
-not be testable at all. Caveats: one path, three days, one tuning day.
+Caveats: one path per product, three days, 39 variants with the best chosen on a
+single tuning day. Next hypothesis: a mean-reversion test (variance ratio) as the
+second leg of the regime switch so the Ash MM stands down when Ash stops
+reverting.
 
 ## How it works
 
@@ -148,9 +166,9 @@ python prepare_data.py            # generate cleaned/ from cleaned/raw/ (require
 python run.py stats               # per-day price stats, shows the Pepper trend
 python run.py backtest            # rebuilt trader, both products, all days
 python run.py compare             # rebuilt trader vs. trivial baseline, both products
-pytest tests -q                   # 35 tests
+pytest tests -q                   # 37 tests
 python walkforward.py tune        # all variants on day 0 (prints the variant count)
-python walkforward.py test 500 0.5 0   # the day-0 pick on days 0-2
+python walkforward.py test        # the day-0 picks on days 0-2, both fill models
 python checks.py                  # null, placebo, fill-stress checks
 python validate.py                # regenerate docs/VALIDATION.md and docs/img/*.png
 ```
@@ -169,7 +187,7 @@ python validate.py                # regenerate docs/VALIDATION.md and docs/img/*
 | `cleaned/raw/` | Frozen pre-fix `allPrices.csv`/`allTrades.csv` |
 | `cleaned/` | Corrected prices/trades/analysis CSVs (generated by `prepare_data.py`, gitignored) |
 | `walkforward.py`, `checks.py` | Day-0 tuning / out-of-sample scoring; null, placebo and fill-stress checks |
-| `docs/PROTOCOL.md` | The evaluation protocol, declared before testing new strategies |
+| `docs/PROTOCOL.md`, `docs/PROTOCOL-2.md`, `docs/tuned.json` | The evaluation protocols (declared before the experiments) and the day-0 picks |
 | `legacy/` | The four superseded bots plus the original TraderC1.py, annotated |
 | `Background_and_Research/` | Pre-rebuild exploratory plots (`AshGraph.png`, `PepperGraph.png`) |
 | `docs/BACKGROUND.md` | Full writeup of the day-ordering bug and why it matters |
@@ -178,8 +196,7 @@ python validate.py                # regenerate docs/VALIDATION.md and docs/img/*
 
 ## Future interests
 
-- Null-calibrate the regime detector's threshold (a first, day-0-tuned attempt
-  is in `trader.py` and fails the null check; see Results).
+- A mean-reversion test as the second leg of the regime switch (see Results).
 - Round 2+ products and the actual IMC conversions/observations mechanics,
   which this round didn't exercise (`datamodel.py` includes
   `ConversionObservation` for forward compatibility but nothing here uses it).

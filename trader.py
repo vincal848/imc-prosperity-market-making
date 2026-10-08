@@ -41,7 +41,7 @@ rollingWindow = 500
 shortWindow = 50
 maxDelta = 15
 maxSkewTicks = 4
-trendThreshold = 2.0  # |t| above this -> trend mode; float("inf") disables it
+trendThreshold = 3.7  # 99th pct of the running max |t| of a random walk, see docs/PROTOCOL-2.md; |t| above this -> trend mode; float("inf") disables it
 overlay = 0  # in trend mode, market-make only within this many units of the +/-limit core
 
 
@@ -218,6 +218,10 @@ def inventorySkew(position, state, horizon, halfSpread):
 class Strategy:
     symbol = ""
     horizon = 3000
+    width = 0  # fixed half spread in ticks; 0 = learned from the trade histogram
+    skewScale = 1.0  # multiplies the inventory skew
+    anchor = 0.0  # weight pulling fair value toward the mean of the last rollingWindow mids
+    takeEdge = 0  # cross the book when the touch is this many ticks through fair value; 0 = never
 
     def quoteSize(self):
         return 10
@@ -240,11 +244,13 @@ class Strategy:
             return []
 
         fairValue += self.fairValueShift(state)
+        if self.anchor and state.mids:
+            fairValue += self.anchor * (sum(state.mids) / len(state.mids) - fairValue)
 
-        baseHalfSpread = chooseHalfSpread(state)
+        baseHalfSpread = self.width or chooseHalfSpread(state)
         halfSpread = baseHalfSpread + self.extraSpread(state)
 
-        skew = inventorySkew(position, state, self.horizon, baseHalfSpread)
+        skew = self.skewScale * inventorySkew(position, state, self.horizon, baseHalfSpread)
 
         volMult = state.volMultiplier()
         halfSpread = max(1, int(round(halfSpread * volMult)))
@@ -278,6 +284,15 @@ class Strategy:
 
         orders = []
 
+        if self.takeEdge and bestAsk and bestAsk <= fairValue - self.takeEdge and roomToBuy > 0:
+            takeSize = min(sizeCap, roomToBuy)
+            orders.append((bestAsk, takeSize))
+            roomToBuy -= takeSize
+        if self.takeEdge and bestBid and bestBid >= fairValue + self.takeEdge and roomToSell > 0:
+            takeSize = min(sizeCap, roomToSell)
+            orders.append((bestBid, -takeSize))
+            roomToSell -= takeSize
+
         if bidPresent and roomToBuy > 0:
             buySize = min(sizeCap, roomToBuy)
             if buySize > 0:
@@ -294,9 +309,14 @@ class Strategy:
 class AshStrategy(Strategy):
     symbol = "ASH_COATED_OSMIUM"
     horizon = 3000
+    # Day-0 picks under stressed fills (docs/PROTOCOL-2.md); the pre-protocol-2 MM was width 0, anchor 0, takeEdge 0, size 10.
+    width = 3
+    anchor = 1.0
+    takeEdge = 2
+    size = 20
 
     def quoteSize(self):
-        return 10
+        return self.size
 
     def allowOneSidedQuote(self):
         return True

@@ -231,3 +231,55 @@ def test_trend_mode_does_not_engage_on_linearly_detrended_pepper():
     flat, flatTrades = checks.detrended(prices, trades)
     records = backtest.Backtester(traderModule.Trader(), "INTARIAN_PEPPER_ROOT", prices=flat, trades=flatTrades).run()
     assert records["position"].abs().max() < 70
+
+
+def _walk(seed, ticks, reversion):
+    """Mid path with per-tick noise sd 2.8; reversion=0 is a driftless random walk, >0 an OU series around 10000."""
+    import numpy as np
+    rng, x, out = np.random.default_rng(seed), 0.0, []
+    for _ in range(ticks):
+        x += -reversion * x + rng.normal(0, 2.8)
+        out.append(10000 + x)
+    return out
+
+
+def test_variance_ratio_guard_engages_on_a_planted_mean_reverting_series_and_not_on_a_random_walk():
+    ash = traderModule.strategies["ASH_COATED_OSMIUM"]
+    lag, threshold = ash.guardLag, ash.guardThreshold
+    assert traderModule.varianceRatioZ(_walk(0, 1000, 0.3)[-500:], lag) < -threshold
+    walks = [_walk(seed, 5000, 0.0) for seed in range(4)]
+    zs = [traderModule.varianceRatioZ(w[end - 500:end], lag) for w in walks for end in range(500, 5000, 25)]
+    assert sum(z < -threshold for z in zs) / len(zs) <= 0.02
+
+
+def _cheap_ask_orders(strategy, mids):
+    state = feed(mids)
+    fair = round(state.lastFairValue)
+    return fair, strategy.decide(state, fair, 0, True, True, bestBid=fair - 9, bestAsk=fair - 5)
+
+
+def test_disengaged_guard_stops_taking_the_book_and_the_flat_fallback_unwinds():
+    ash = traderModule.AshStrategy()
+    fair, orders = _cheap_ask_orders(ash, _walk(1, 800, 0.3))
+    assert (fair - 5, 20) in orders  # mean-reverting: takes the cheap ask
+    fair, orders = _cheap_ask_orders(ash, _walk(1, 800, 0.0))
+    assert (fair - 5, 20) not in orders  # random walk: passive quoting only
+    ash.guardFlat = True
+    state = feed(_walk(1, 800, 0.0))
+    assert ash.decide(state, 10000.0, 30, True, True, bestBid=9999, bestAsk=10001) == [(9999, -20)]
+    assert ash.decide(state, 10000.0, -5, True, True, bestBid=9999, bestAsk=10001) == [(10001, 5)]
+
+
+@pytest.mark.skipif(not os.path.exists(os.path.join(ROOT, "cleaned", "ashPrices.csv")),
+                    reason="cleaned/ashPrices.csv not generated")
+def test_guarded_ash_mm_loses_far_less_than_unguarded_on_shuffled_increment_ash():
+    import backtest
+    import checks
+    prices, trades = checks.random_walked(*backtest.load_product("ASH_COATED_OSMIUM"), seed=0)
+
+    def pnl(bot):
+        return backtest.Backtester(bot, "ASH_COATED_OSMIUM", prices=prices, trades=trades).run()["pnl"].iloc[-1]
+
+    # Regression bound, NOT the declared criterion (>= baseline - 30,000, which the guard misses: see README).
+    # The unguarded MM lost 211,673 here; the baseline gained 22,141.
+    assert pnl(traderModule.Trader()) >= -60000

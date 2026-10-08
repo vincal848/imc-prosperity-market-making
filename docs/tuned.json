@@ -1,1 +1,1 @@
-{"pepper": [3.7, 0, "rw99"], "ash": {"width": 3, "skewScale": 1.0, "anchor": 1.0, "takeEdge": 2, "size": 20}, "variants": {"protocol1": 19, "pepper": 6, "ash": 14, "total": 39}}
+{"pepper": [3.7, 0, "rw99"], "ash": {"width": 3, "skewScale": 1.0, "anchor": 1.0, "takeEdge": 2, "size": 20}, "variants": {"protocol1": 19, "pepper": 6, "ash": 14, "total": 43, "protocol3": 4}, "guard": {"guardLag": 5, "guardThreshold": 2.289666770176428, "guardFlat": false}}

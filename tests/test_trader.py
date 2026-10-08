@@ -173,3 +173,24 @@ def test_trader_run_never_proposes_an_order_that_alone_would_breach_the_position
         for order in orders.get(symbol, []):
             resulting = position + order.quantity
             assert -traderModule.positionLimit <= resulting <= traderModule.positionLimit
+
+
+def feed(mids):
+    state = traderModule.RollingState()
+    for i, mid in enumerate(mids):
+        state.observe(mid, mid, True, True, [])
+    return state
+
+
+def test_trend_target_follows_a_steady_drift_and_ignores_a_flat_series():
+    n = 1000
+    noise = [(-1) ** i for i in range(n)]
+    assert feed([10000 + 0.1 * i + noise[i] for i in range(n)]).trendTarget() == traderModule.positionLimit
+    assert feed([10000 - 0.1 * i + noise[i] for i in range(n)]).trendTarget() == -traderModule.positionLimit
+    assert feed([10000 + noise[i] for i in range(n)]).trendTarget() == 0
+
+
+def test_in_trend_mode_the_trader_crosses_the_book_to_rebuild_the_core():
+    state = feed([10000 + 0.1 * i + (-1) ** i for i in range(1000)])
+    quotes = traderModule.strategies["INTARIAN_PEPPER_ROOT"].decide(state, 10100.0, 0, True, True, 10099, 10101)
+    assert quotes == [(10101, traderModule.positionLimit)]

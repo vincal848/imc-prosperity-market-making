@@ -41,6 +41,10 @@ rollingWindow = 500
 shortWindow = 50
 maxDelta = 15
 maxSkewTicks = 4
+trendLookback = 500  # ticks of history behind the drift t-stat
+trendThreshold = 0.5  # |t| above this -> trend mode; float("inf") disables it
+overlay = 0  # in trend mode, market-make only within this many units of the +/-limit core
+trendSamples = 40
 
 
 @dataclass
@@ -48,6 +52,7 @@ class RollingState:
     mids: deque = field(default_factory=lambda: deque(maxlen=rollingWindow))
     returns: deque = field(default_factory=lambda: deque(maxlen=rollingWindow))
     returnsShort: deque = field(default_factory=lambda: deque(maxlen=shortWindow))
+    samples: deque = field(default_factory=lambda: deque(maxlen=trendSamples))
     deltaCounts: dict = field(default_factory=dict)
 
     tickWeight: float = 0.0
@@ -79,6 +84,10 @@ class RollingState:
                 distance = int(round(abs(price - anchor)))
                 if 0 <= distance <= maxDelta:
                     self.deltaCounts[distance] = self.deltaCounts.get(distance, 0.0) + 1.0
+
+        step = max(1, trendLookback // trendSamples)
+        if mid > 0 and self.totalTicks % step == 0:
+            self.samples.append(mid)
 
         if self.totalTicks % 500 == 0:
             self.tickWeight *= 0.5
@@ -128,8 +137,25 @@ class RollingState:
         recent = list(self.mids)[-lookback:]
         return recent[-1] - recent[0]
 
+    def trendStat(self) -> float:
+        """t-stat of the drift over ~trendLookback ticks, assuming i.i.d. per-tick changes."""
+        if len(self.samples) < trendSamples or self.lastMid <= 0:
+            return 0.0
+        span = (trendSamples - 1) * max(1, trendLookback // trendSamples)
+        return (self.lastMid - self.samples[0]) / (max(self.sigma(), 0.1) * math.sqrt(span))
+
+    def trendTarget(self) -> int:
+        """+/-positionLimit when the drift is significant, else 0 (plain market making)."""
+        stat = self.trendStat()
+        if stat > trendThreshold:
+            return positionLimit
+        if stat < -trendThreshold:
+            return -positionLimit
+        return 0
+
     def toDict(self):
         return {
+            "samples": list(self.samples),
             "mids": list(self.mids),
             "returns": list(self.returns),
             "returnsShort": list(self.returnsShort),
@@ -147,6 +173,7 @@ class RollingState:
         state.mids = deque(data.get("mids", []), maxlen=rollingWindow)
         state.returns = deque(data.get("returns", []), maxlen=rollingWindow)
         state.returnsShort = deque(data.get("returnsShort", []), maxlen=shortWindow)
+        state.samples = deque(data.get("samples", []), maxlen=trendSamples)
         state.deltaCounts = {int(k): float(v) for k, v in data.get("deltaCounts", {}).items()}
         state.tickWeight = float(data.get("tickWeight", data.get("totalTicks", 0.0)))
         state.totalTicks = int(data.get("totalTicks", 0))
@@ -204,7 +231,7 @@ class Strategy:
     def allowOneSidedQuote(self):
         return True
 
-    def decide(self, state, mid, position, bidPresent, askPresent):
+    def decide(self, state, mid, position, bidPresent, askPresent, bestBid=0, bestAsk=0):
         fairValue = state.fairValue(mid)
         if fairValue <= 0:
             return []
@@ -232,8 +259,22 @@ class Strategy:
         bidPrice = min(int(round(reservationPrice - halfSpread)), fairValueTick)
         askPrice = max(int(round(reservationPrice + halfSpread)), fairValueTick + 1)
 
-        roomToBuy = max(0, positionLimit - position)
-        roomToSell = max(0, positionLimit + position)
+        # Trend mode: hold a +/-limit core and market-make only in the overlay band
+        # above/below it; no trend: the band is the whole [-limit, limit] range.
+        target = state.trendTarget()
+        if target == 0:
+            low, high = -positionLimit, positionLimit
+        elif target > 0:
+            low, high = target - overlay, target
+        else:
+            low, high = target, target + overlay
+        if position < low and bestAsk:
+            return [(bestAsk, low - position)]  # rebuild the core by crossing the book
+        if position > high and bestBid:
+            return [(bestBid, -(position - high))]
+
+        roomToBuy = max(0, high - position)
+        roomToSell = max(0, position - low)
 
         orders = []
 
@@ -330,7 +371,7 @@ def bookStats(depth, fallbackFairValue):
 
 
 class Trader:
-    def run(self, state: TradingState):
+    def run(self, state: TradingState) -> tuple[dict, int, str]:
         try:
             stateBlob = json.loads(state.traderData) if state.traderData else {}
         except Exception:
@@ -353,7 +394,9 @@ class Trader:
             rollingState.updateVolShock()
 
             position = state.position.get(product, 0)
-            quotes = strategy.decide(rollingState, mid, position, bidPresent, askPresent)
+            bestBid = max(depth.buy_orders) if depth.buy_orders else 0
+            bestAsk = min(depth.sell_orders) if depth.sell_orders else 0
+            quotes = strategy.decide(rollingState, mid, position, bidPresent, askPresent, bestBid, bestAsk)
 
             result[product] = [
                 Order(product, int(price), int(quantity))

@@ -13,6 +13,12 @@ model of one:
     trade quantity, filled at OUR price (we assume full price improvement
     for the resting side, which is the standard backtest convention when the
     real counterparty-matching logic is unknown).
+  - No look-ahead: the trader's state.market_trades is the PREVIOUS tick's
+    prints; resting quotes fill against the CURRENT tick's prints, which the
+    trader has not seen when it quotes.
+  - Optional stress knobs: passiveFillFraction scales the printed quantity a
+    resting order may take; strictTradeThrough requires the print to be
+    strictly through our price (a print AT our price does not fill us).
   - Position limit (80): if fully filling every order for a product this
     tick could push the position beyond +-80 in either direction, every
     order for that product is rejected for the tick -- this mirrors IMC's
@@ -79,8 +85,11 @@ def group_trades(trades):
 class Backtester:
     """Replays one Trader against one product's prices/trades."""
 
-    def __init__(self, trader, product, days=None, prices=None, trades=None):
+    def __init__(self, trader, product: str, days=None, prices=None, trades=None,
+                 passiveFillFraction: float = 1.0, strictTradeThrough: bool = False):
         self.trader = trader
+        self.passiveFillFraction = passiveFillFraction
+        self.strictTradeThrough = strictTradeThrough
         self.product = product
         if prices is None or trades is None:
             prices, trades = load_product(product, days)
@@ -93,6 +102,7 @@ class Backtester:
         self.traderData = ""
         self.lastMid = None
         self.records = []
+        self.prevTrades = []
 
     def run(self):
         for row in self.prices.itertuples():
@@ -111,7 +121,7 @@ class Backtester:
                 listings={},
                 order_depths={self.product: depth},
                 own_trades={},
-                market_trades={self.product: marketTrades},
+                market_trades={self.product: self.prevTrades},
                 position={self.product: self.position},
                 observations=Observation({}, {}),
             )
@@ -119,6 +129,7 @@ class Backtester:
             orders, _conversions, self.traderData = self.trader.run(state)
             productOrders = orders.get(self.product, [])
             self._apply(productOrders, depth, marketTrades)
+            self.prevTrades = marketTrades
 
             markToMarket = self.cash + self.position * (mid if mid is not None else 0.0)
             self.records.append({
@@ -162,8 +173,8 @@ class Backtester:
         for trade in marketTrades:
             if remaining <= 0:
                 break
-            if trade.price <= order.price:
-                quantity = min(remaining, trade.quantity)
+            if self._through(trade.price, order.price, buy=True):
+                quantity = min(remaining, int(trade.quantity * self.passiveFillFraction))
                 self._settle(quantity, order.price)
                 remaining -= quantity
 
@@ -181,21 +192,26 @@ class Backtester:
         for trade in marketTrades:
             if remaining <= 0:
                 break
-            if trade.price >= order.price:
-                quantity = min(remaining, trade.quantity)
+            if self._through(trade.price, order.price, buy=False):
+                quantity = min(remaining, int(trade.quantity * self.passiveFillFraction))
                 self._settle(-quantity, order.price)
                 remaining -= quantity
+
+    def _through(self, tradePrice: float, orderPrice: float, buy: bool) -> bool:
+        if self.strictTradeThrough:
+            return tradePrice < orderPrice if buy else tradePrice > orderPrice
+        return tradePrice <= orderPrice if buy else tradePrice >= orderPrice
 
     def _settle(self, signedQuantity, price):
         self.position += signedQuantity
         self.cash -= signedQuantity * price
 
 
-def run_backtest(trader, product, days=None):
-    return Backtester(trader, product, days).run()
+def run_backtest(trader, product: str, days=None, **fillKwargs) -> pd.DataFrame:
+    return Backtester(trader, product, days, **fillKwargs).run()
 
 
-def day_pnl(records):
+def day_pnl(records: pd.DataFrame) -> pd.Series:
     """Realized mark-to-market PnL per day: last tick's cumulative pnl minus the previous day's."""
     perDayEnd = records.groupby("day")["pnl"].last().sort_index()
     return perDayEnd.diff().fillna(perDayEnd.iloc[0] if len(perDayEnd) else 0.0)

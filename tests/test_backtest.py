@@ -123,3 +123,48 @@ def test_day_pnl_sums_to_the_final_cumulative_pnl():
     })
     perDay = backtest.day_pnl(records)
     assert perDay.sum() == records["pnl"].iloc[-1]
+
+
+class RecordingTrader:
+    """Records the market_trades it is shown each tick; never trades."""
+
+    def __init__(self):
+        self.seen = []
+
+    def run(self, state):
+        self.seen.append([t.price for t in state.market_trades[PRODUCT]])
+        return {}, 0, state.traderData
+
+
+def test_the_trader_sees_the_previous_ticks_trades_not_the_current_ones():
+    prices = pd.concat([one_tick_prices(timestamp=0), one_tick_prices(timestamp=100)], ignore_index=True)
+    trades = pd.concat([trades_df([(101, 1)], timestamp=0), trades_df([(102, 1)], timestamp=100)], ignore_index=True)
+    recorder = RecordingTrader()
+    backtest.Backtester(recorder, PRODUCT, prices=prices, trades=trades).run()
+
+    assert recorder.seen == [[], [101]]
+
+
+def test_a_resting_quote_still_fills_against_the_current_ticks_print():
+    orders = [Order(PRODUCT, 95, 3)]
+    backtester, _records = run_one_tick(orders, asks=[(110, 5)], prints=[(94, 2)])
+
+    assert backtester.position == 2
+
+
+def test_passive_fill_stress_halves_the_printed_quantity_and_needs_a_strict_print():
+    prices, trades = one_tick_prices(asks=[(110, 5)]), trades_df([(95, 4), (94, 4)])
+    stressed = backtest.Backtester(FixedOrdersTrader([Order(PRODUCT, 95, 10)]), PRODUCT, prices=prices,
+                                   trades=trades, passiveFillFraction=0.5, strictTradeThrough=True)
+    stressed.run()
+
+    assert stressed.position == 2  # the 95 print is not strictly through; the 94 print fills int(4 * 0.5)
+
+
+def test_buy_and_hold_keeps_buying_every_tick_until_the_limit():
+    import baselines
+    n = 30
+    prices = pd.concat([one_tick_prices(asks=[(101, 5)], timestamp=100 * i) for i in range(n)], ignore_index=True)
+    records = backtest.Backtester(baselines.BuyAndHoldTrader(), PRODUCT, prices=prices, trades=trades_df([])).run()
+
+    assert records["position"].iloc[-1] == backtest.POSITION_LIMIT

@@ -19,5 +19,7 @@ jobs:
           cache: pip
       - name: Install
         run: pip install -r requirements-dev.txt
+      - name: Regenerate derived data
+        run: python prepare_data.py
       - name: Test
         run: pytest tests -q

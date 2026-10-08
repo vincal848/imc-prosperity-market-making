@@ -41,6 +41,8 @@ rollingWindow = 500
 shortWindow = 50
 maxDelta = 15
 maxSkewTicks = 4
+trendThreshold = 3.7  # 99th pct of the running max |t| of a random walk, see docs/PROTOCOL-2.md; |t| above this -> trend mode; float("inf") disables it
+overlay = 0  # in trend mode, market-make only within this many units of the +/-limit core
 
 
 @dataclass
@@ -48,6 +50,7 @@ class RollingState:
     mids: deque = field(default_factory=lambda: deque(maxlen=rollingWindow))
     returns: deque = field(default_factory=lambda: deque(maxlen=rollingWindow))
     returnsShort: deque = field(default_factory=lambda: deque(maxlen=shortWindow))
+    firstMid: float = 0.0
     deltaCounts: dict = field(default_factory=dict)
 
     tickWeight: float = 0.0
@@ -79,6 +82,9 @@ class RollingState:
                 distance = int(round(abs(price - anchor)))
                 if 0 <= distance <= maxDelta:
                     self.deltaCounts[distance] = self.deltaCounts.get(distance, 0.0) + 1.0
+
+        if self.firstMid == 0.0:
+            self.firstMid = mid
 
         if self.totalTicks % 500 == 0:
             self.tickWeight *= 0.5
@@ -128,8 +134,28 @@ class RollingState:
         recent = list(self.mids)[-lookback:]
         return recent[-1] - recent[0]
 
+    def trendStat(self) -> float:
+        """t-stat of the drift since the first tick, assuming i.i.d. per-tick changes.
+
+        ponytail: expanding window, so a regime change late in a long run is detected slowly;
+        upgrade to a rolling window if the data ever spans regimes.
+        """
+        if self.totalTicks < 500 or self.lastMid <= 0:
+            return 0.0
+        return (self.lastMid - self.firstMid) / (max(self.sigma(), 0.1) * math.sqrt(self.totalTicks))
+
+    def trendTarget(self) -> int:
+        """+/-positionLimit when the drift is significant, else 0 (plain market making)."""
+        stat = self.trendStat()
+        if stat > trendThreshold:
+            return positionLimit
+        if stat < -trendThreshold:
+            return -positionLimit
+        return 0
+
     def toDict(self):
         return {
+            "firstMid": self.firstMid,
             "mids": list(self.mids),
             "returns": list(self.returns),
             "returnsShort": list(self.returnsShort),
@@ -147,6 +173,7 @@ class RollingState:
         state.mids = deque(data.get("mids", []), maxlen=rollingWindow)
         state.returns = deque(data.get("returns", []), maxlen=rollingWindow)
         state.returnsShort = deque(data.get("returnsShort", []), maxlen=shortWindow)
+        state.firstMid = float(data.get("firstMid", 0.0))
         state.deltaCounts = {int(k): float(v) for k, v in data.get("deltaCounts", {}).items()}
         state.tickWeight = float(data.get("tickWeight", data.get("totalTicks", 0.0)))
         state.totalTicks = int(data.get("totalTicks", 0))
@@ -191,6 +218,10 @@ def inventorySkew(position, state, horizon, halfSpread):
 class Strategy:
     symbol = ""
     horizon = 3000
+    width = 0  # fixed half spread in ticks; 0 = learned from the trade histogram
+    skewScale = 1.0  # multiplies the inventory skew
+    anchor = 0.0  # weight pulling fair value toward the mean of the last rollingWindow mids
+    takeEdge = 0  # cross the book when the touch is this many ticks through fair value; 0 = never
 
     def quoteSize(self):
         return 10
@@ -204,7 +235,7 @@ class Strategy:
     def allowOneSidedQuote(self):
         return True
 
-    def decide(self, state, mid, position, bidPresent, askPresent):
+    def decide(self, state, mid, position, bidPresent, askPresent, bestBid=0, bestAsk=0):
         fairValue = state.fairValue(mid)
         if fairValue <= 0:
             return []
@@ -213,11 +244,13 @@ class Strategy:
             return []
 
         fairValue += self.fairValueShift(state)
+        if self.anchor and state.mids:
+            fairValue += self.anchor * (sum(state.mids) / len(state.mids) - fairValue)
 
-        baseHalfSpread = chooseHalfSpread(state)
+        baseHalfSpread = self.width or chooseHalfSpread(state)
         halfSpread = baseHalfSpread + self.extraSpread(state)
 
-        skew = inventorySkew(position, state, self.horizon, baseHalfSpread)
+        skew = self.skewScale * inventorySkew(position, state, self.horizon, baseHalfSpread)
 
         volMult = state.volMultiplier()
         halfSpread = max(1, int(round(halfSpread * volMult)))
@@ -232,10 +265,33 @@ class Strategy:
         bidPrice = min(int(round(reservationPrice - halfSpread)), fairValueTick)
         askPrice = max(int(round(reservationPrice + halfSpread)), fairValueTick + 1)
 
-        roomToBuy = max(0, positionLimit - position)
-        roomToSell = max(0, positionLimit + position)
+        # Trend mode: hold a +/-limit core and market-make only in the overlay band
+        # above/below it; no trend: the band is the whole [-limit, limit] range.
+        target = state.trendTarget()
+        if target == 0:
+            low, high = -positionLimit, positionLimit
+        elif target > 0:
+            low, high = target - overlay, target
+        else:
+            low, high = target, target + overlay
+        if position < low and bestAsk:
+            return [(bestAsk, low - position)]  # rebuild the core by crossing the book
+        if position > high and bestBid:
+            return [(bestBid, -(position - high))]
+
+        roomToBuy = max(0, high - position)
+        roomToSell = max(0, position - low)
 
         orders = []
+
+        if self.takeEdge and bestAsk and bestAsk <= fairValue - self.takeEdge and roomToBuy > 0:
+            takeSize = min(sizeCap, roomToBuy)
+            orders.append((bestAsk, takeSize))
+            roomToBuy -= takeSize
+        if self.takeEdge and bestBid and bestBid >= fairValue + self.takeEdge and roomToSell > 0:
+            takeSize = min(sizeCap, roomToSell)
+            orders.append((bestBid, -takeSize))
+            roomToSell -= takeSize
 
         if bidPresent and roomToBuy > 0:
             buySize = min(sizeCap, roomToBuy)
@@ -253,9 +309,14 @@ class Strategy:
 class AshStrategy(Strategy):
     symbol = "ASH_COATED_OSMIUM"
     horizon = 3000
+    # Day-0 picks under stressed fills (docs/PROTOCOL-2.md); the pre-protocol-2 MM was width 0, anchor 0, takeEdge 0, size 10.
+    width = 3
+    anchor = 1.0
+    takeEdge = 2
+    size = 20
 
     def quoteSize(self):
-        return 10
+        return self.size
 
     def allowOneSidedQuote(self):
         return True
@@ -330,7 +391,7 @@ def bookStats(depth, fallbackFairValue):
 
 
 class Trader:
-    def run(self, state: TradingState):
+    def run(self, state: TradingState) -> tuple[dict, int, str]:
         try:
             stateBlob = json.loads(state.traderData) if state.traderData else {}
         except Exception:
@@ -353,7 +414,9 @@ class Trader:
             rollingState.updateVolShock()
 
             position = state.position.get(product, 0)
-            quotes = strategy.decide(rollingState, mid, position, bidPresent, askPresent)
+            bestBid = max(depth.buy_orders) if depth.buy_orders else 0
+            bestAsk = min(depth.sell_orders) if depth.sell_orders else 0
+            quotes = strategy.decide(rollingState, mid, position, bidPresent, askPresent, bestBid, bestAsk)
 
             result[product] = [
                 Order(product, int(price), int(quantity))

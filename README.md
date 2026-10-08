@@ -37,7 +37,7 @@ to the limit and holding beats the rebuilt market maker's PnL curve for the whol
 | **Inputs** | `cleaned/*.csv` -- 3 days x 10,000 ticks x 2 products of IMC Prosperity order book snapshots and trades |
 | **Outputs** | `trader.py` (submission-ready), per-tick/per-day mark-to-market PnL |
 | **Validation** | 35 pytest tests: pricing formulas, skew sign/clamp, state round-trip, position-limit compliance, backtester fill/limit invariants, day-ordering correctness |
-| **Headline result** | Rebuilt MM beats a trivial baseline on mean-reverting Ash; a trivial buy-and-hold baseline beats the rebuilt MM on trending Pepper |
+| **Headline result** | No edge over honest baselines: hold-to-limit (239,471) beats every Pepper strategy tried out of sample; the Ash MM beats its baseline over the round but not on day 1 or under stricter fills |
 | **Stack** | Python 3.13, stdlib only for `trader.py`; pandas/numpy/matplotlib for backtest/analysis |
 
 ## Results
@@ -79,7 +79,7 @@ worse than no overlay.
 
 **Verdict.** On Pepper the trend mode ties on day 1 and is 66 behind on day 2:
 it does not beat hold-to-limit, and cannot -- the position is capped at 80, so
-the drift is already fully captured by the baseline; the 3,562 shortfall on day 0
+the drift is already fully captured by the baseline; the 3,492 shortfall on day 0
 is just the lookback warm-up before the trend is detected. On Ash the market
 maker wins day 2 by 1,720 but loses day 1 by 25. No edge over the honest
 baselines yet.

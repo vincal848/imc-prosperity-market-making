@@ -63,5 +63,5 @@ failed, not retuned in this PR.
 ## Calibration result (committed before any variant was scored)
 
 `python walkforward.py calibrate`: c_5 = 2.29 (0.8% false engagement on the
-independent seed set), c_20 = 1.979 (1.0%). Both within the declared 1% (the
-eligibility check allows up to 2x on sampling noise).
+independent seed set), c_20 = 1.979 (1.0%). Both are within the declared 1%
+(the code asserts 2x as a sampling-noise tolerance; neither needed it).

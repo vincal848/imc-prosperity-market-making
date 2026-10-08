@@ -70,11 +70,17 @@ def main() -> None:
         print(f"{label:20s} strategy pnl {records['pnl'].iloc[-1]:>10.0f} final pos {records['position'].iloc[-1]:>4}"
               f" share|pos|>=70 {share:.2f} min pos {records['position'].min()} | hold-to-limit pnl {base['pnl'].iloc[-1]:.0f}")
     ashPrices, ashTrades = backtest.load_product(ASH)
-    p, t = random_walked(ashPrices, ashTrades)
-    for label, bot in (("tuned MM", trader.Trader()),
-                       ("fixed-value baseline", baselines.FixedValueMarketMaker(fairValue=10000, halfSpread=2, quoteSize=10))):
-        records = backtest.Backtester(bot, ASH, prices=p, trades=t).run()
-        print(f"Ash random-walk null, {label}: pnl {records['pnl'].iloc[-1]:.0f} min/max pos {records['position'].min()}/{records['position'].max()}")
+    ash = trader.strategies[ASH]
+    guardLag = ash.guardLag
+    for seed in range(5):
+        p, t = random_walked(ashPrices, ashTrades, seed)
+        pnl = {}
+        for label, ash.guardLag in (("guarded", guardLag), ("unguarded", 0)):
+            pnl[label] = backtest.Backtester(trader.Trader(), ASH, prices=p, trades=t).run()["pnl"].iloc[-1]
+        base = backtest.Backtester(baselines.FixedValueMarketMaker(fairValue=10000, halfSpread=2, quoteSize=10),
+                                   ASH, prices=p, trades=t).run()["pnl"].iloc[-1]
+        print(f"Ash random-walk null seed {seed}: guarded MM {pnl['guarded']:.0f}, unguarded MM {pnl['unguarded']:.0f}, fixed-value baseline {base:.0f}")
+    ash.guardLag = guardLag
     stress = STRESS
     for product in (PEPPER, ASH):
         strat = list(backtest.day_pnl(backtest.run_backtest(trader.Trader(), product, [0, 1, 2], **stress)))

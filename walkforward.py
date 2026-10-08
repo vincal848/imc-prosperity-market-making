@@ -139,11 +139,14 @@ def tune() -> None:
 def test() -> None:
     with open(TUNED) as handle:
         tuned = json.load(handle)
+    guarded = {**tuned["ash"], **tuned["guard"]}
     for label, fill in (("unstressed", {}), ("stressed", STRESS)):
         for product in (PEPPER, ASH):
-            configure(tuned["pepper"][0], tuned["pepper"][1], tuned["ash"])
+            configure(tuned["pepper"][0], tuned["pepper"][1], guarded)
             print(label, product, "tuned", run(product, [0, 1, 2], **fill), "baseline", baseline(product, [0, 1, 2], **fill))
             if product == ASH:
+                configure(tuned["pepper"][0], tuned["pepper"][1], {**tuned["ash"], "guardLag": 0})
+                print(label, product, "unguarded protocol-2 pick", run(product, [0, 1, 2], **fill))
                 configure(tuned["pepper"][0], tuned["pepper"][1], ASH_START)
                 print(label, product, "learned MM (start)", run(product, [0, 1, 2], **fill))
 

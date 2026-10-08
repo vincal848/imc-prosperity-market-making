@@ -342,6 +342,10 @@ class AshStrategy(Strategy):
     anchor = 1.0
     takeEdge = 2
     size = 20
+    # Day-0 pick of the variance-ratio guard (docs/PROTOCOL-3.md): passive quoting without anchor or taking unless VR(5) is significantly < 1.
+    guardLag = 5
+    guardThreshold = 2.29
+    guardFlat = False
 
     def quoteSize(self):
         return self.size

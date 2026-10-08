@@ -22,7 +22,8 @@ reaches 153,106 because it needs evidence before it commits, and it ties the
 baseline only on day 2. On ASH_COATED_OSMIUM, a market maker re-tuned on day 0
 under stressed fills beats the fixed-value baseline on both test days under
 both fill models (but it is a mean-reversion bet: it loses badly on a
-random-walk version of Ash, see Checks).
+random-walk version of Ash; a variance-ratio guard cuts that loss from 211,673 to
+31,314 on the seed-0 path but does not meet its declared bound, see Checks).
 
 ![Pepper mid price across the corrected day order, and PnL: rebuilt trader vs. buy-and-hold](docs/img/pepper_price_and_pnl.png)
 *Top: Pepper's mid price across all three days once the day labels are fixed -- one continuous
@@ -37,8 +38,8 @@ to the limit and holding beats the rebuilt market maker's PnL curve for the whol
 | **Methods** | Avellaneda-Stoikov-style inventory skew, empirical fill-rate-weighted half spread, vol-shock spread widening, short-window drift fair-value shift |
 | **Inputs** | `cleaned/*.csv` -- 3 days x 10,000 ticks x 2 products of IMC Prosperity order book snapshots and trades |
 | **Outputs** | `trader.py` (submission-ready), per-tick/per-day mark-to-market PnL |
-| **Validation** | 37 pytest tests: pricing formulas, skew sign/clamp, state round-trip, position-limit compliance, backtester fill/limit invariants, day-ordering correctness |
-| **Headline result** | Hold-to-limit (239,471) beats every Pepper strategy tried out of sample; the Ash MM re-tuned on day 0 under stressed fills beats its fixed-value baseline on both test days under both fill models, but is a mean-reversion bet |
+| **Validation** | 40 pytest tests: pricing formulas, skew sign/clamp, state round-trip, position-limit compliance, backtester fill/limit invariants, day-ordering correctness, variance-ratio guard |
+| **Headline result** | Hold-to-limit (239,471) beats every Pepper strategy tried out of sample; the Ash MM re-tuned on day 0 under stressed fills beats its fixed-value baseline on both test days under both fill models, but is a mean-reversion bet; the variance-ratio guard fixes the real-day numbers' risk only partly (criterion 2 failed on 2 of 5 random-walk paths) |
 | **Stack** | Python 3.13, stdlib only for `trader.py`; pandas/numpy/matplotlib for backtest/analysis |
 
 ## Results
@@ -50,10 +51,11 @@ once and end at 9 units). Each has a test that fails without it.
 
 **Protocols.** [`docs/PROTOCOL.md`](docs/PROTOCOL.md) (19 variants) and
 [`docs/PROTOCOL-2.md`](docs/PROTOCOL-2.md) (20 more: 6 Pepper regime-switch
-variants, 14 Ash market-maker variants) were each committed before their
+variants, 14 Ash market-maker variants) and [`docs/PROTOCOL-3.md`](docs/PROTOCOL-3.md)
+(4 more: the variance-ratio guard) were each committed before their
 experiments: tune on **day 0 only**, score days 1 and 2 once. **Total variants
-tried: 39.** `python walkforward.py tune` reproduces the day-0 search and writes
-`docs/tuned.json`; `python walkforward.py test` produces the tables below.
+tried: 43.** `python walkforward.py tune` reproduces the day-0 search and writes
+`docs/tuned.json` (re-running it drops the `guard` entry; `python walkforward.py tune3` re-adds it); `python walkforward.py test` produces the tables below.
 Stressed fills = passive fills at 50% of printed quantity, strictly-through
 prints only; the Ash MM was tuned under them.
 
@@ -89,16 +91,29 @@ kept only to route Pepper to the +/-80 core and Ash to market making.
 |---|---|---:|---:|---:|---:|
 | fixed-value MM (10000 +/- 2) | normal | 6,523 | 8,381 | 6,082 | 20,986 |
 | original learned MM | normal | 8,018 | 8,356 | 7,802 | 24,176 |
-| **re-tuned MM** (day-0 pick) | normal | 8,996 | 11,670 | 9,572 | 30,238 |
+| re-tuned MM, no guard (protocol 2) | normal | 8,996 | 11,670 | 9,572 | 30,238 |
+| **re-tuned MM + VR guard** (protocol 3 pick) | normal | 9,040 | 11,670 | 9,572 | 30,282 |
 | fixed-value MM | stressed | 4,416 | 6,242 | 4,499 | 15,157 |
 | original learned MM | stressed | 2,221.5 | 2,329.5 | 2,244 | 6,795 |
-| **re-tuned MM** (day-0 pick) | stressed | 5,569.5 | 8,385.5 | 5,754 | 19,709 |
+| re-tuned MM, no guard (protocol 2) | stressed | 5,569.5 | 8,385.5 | 5,754 | 19,709 |
+| **re-tuned MM + VR guard** (protocol 3 pick) | stressed | 5,716.5 | 8,385.5 | 5,754 | 19,856 |
 
 The day-0 pick (by stressed day-0 Ash PnL, coordinate descent): half spread 3
 (not learned), inventory skew unchanged, fair value = mean of the last 500 mids
 (anchor weight 1.0), take the book when it is 2 ticks through fair value, size
 20. It beats the fixed-value baseline on both test days under **both** fill
 models. The original learned MM did not survive the stressed model.
+
+**Variance-ratio guard (protocol 3).** The anchor and the take-the-book rule are
+engaged only while the Lo-MacKinlay z of VR(5) over the last 500 mids is below
+-2.29 (the 1st percentile of z on driftless random walks with Ash's volatility,
+so at most 1% of null ticks engage); otherwise the MM quotes passively around
+the microprice with no anchor or taking. Day-0 stressed picks: 5-passive 5,716.5,
+5-flat 5,297.5, 20-passive 5,716.5, 20-flat 5,297.5 (unguarded 5,569.5); the tie
+between lags keeps the earlier. On real Ash the guard is engaged on every tick
+after the 500-tick warm-up, so days 1-2 are identical to the unguarded MM and
+the guard gives back nothing there (the day-0 difference is the warm-up, where
+passive quoting did slightly better).
 
 ### Checks (`python checks.py`; tests in `tests/test_trader.py`)
 
@@ -108,12 +123,17 @@ models. The original learned MM did not survive the stressed model.
 | null: driftless random walk (5 seeded paths x 10,000 ticks) | The old 0.5 threshold engages; the 3.7 threshold never does. This is the test that fails with the old threshold. |
 | placebo: Pepper mirrored | Goes to -80, earns 153,106 (symmetric), no blow-up; hold-to-limit loses 240,511. |
 | fill stress | Pepper unchanged for hold-to-limit; see tables for the Ash MM. |
-| null for the Ash MM: shuffled-increment random-walk Ash | **The re-tuned MM loses 211,673** (fixed-value baseline +22,141). Its edge is a bet that Ash mean-reverts; the regime switch only tests for drift, not for mean reversion. |
+| null for the Ash MM: shuffled-increment random-walk Ash (seeds 0-4, normal fills) | Unguarded MM: -211,673 / -217,365 / -191,229 / -90,037 / -204,730; fixed-value baseline +22,141 / +20,998 / +19,794 / +34,765 / +46,115; **guarded MM: -31,314 / -54,852 / +21,612 / +16,935 / +67,535.** The guard removes most of the blow-up, but **success criterion 2 (guarded >= baseline - 30,000 on every seed) is not met**: seeds 0 and 1 miss it (-31,314 vs a floor of -7,859; -54,852 vs -9,002). The guard is engaged on 1.3% / 1.4% / 2.0% of sampled ticks of seeds 0 / 1 / 2 (100% on real Ash), so the remaining loss comes from the passive fallback and the engaged stretches; which one was not diagnosed. |
+| planted signals for the guard | A mean-reverting OU series engages it; random walks engage it on <= 2% of ticks (tests). |
 
-Caveats: one path per product, three days, 39 variants with the best chosen on a
-single tuning day. Next hypothesis: a mean-reversion test (variance ratio) as the
-second leg of the regime switch so the Ash MM stands down when Ash stops
-reverting.
+Protocol 3 verdict: criterion 1 met (days 1-2 beat the baseline under both fill
+models, nothing given back), criterion 3 met (Pepper and the drift nulls are
+unchanged), **criterion 2 not met** (3 of 5 random-walk paths within the declared
+bound). Per the protocol it was not retuned. Caveats: one path per product, three
+days, 43 variants with the best chosen on a single tuning day; the 1% engagement
+rate is per tick, and a rolling test checked every tick will still fire on some
+random-walk stretches. Next hypothesis: require the VR evidence to persist (or
+use a longer window) before engaging, under a new protocol.
 
 ## How it works
 
@@ -166,8 +186,10 @@ python prepare_data.py            # generate cleaned/ from cleaned/raw/ (require
 python run.py stats               # per-day price stats, shows the Pepper trend
 python run.py backtest            # rebuilt trader, both products, all days
 python run.py compare             # rebuilt trader vs. trivial baseline, both products
-pytest tests -q                   # 37 tests
+pytest tests -q                   # 40 tests
+python walkforward.py calibrate   # protocol 3 variance-ratio thresholds (random walks only)
 python walkforward.py tune        # all variants on day 0 (prints the variant count)
+python walkforward.py tune3       # protocol 3 guard variants on day 0
 python walkforward.py test        # the day-0 picks on days 0-2, both fill models
 python checks.py                  # null, placebo, fill-stress checks
 python validate.py                # regenerate docs/VALIDATION.md and docs/img/*.png
@@ -187,7 +209,7 @@ python validate.py                # regenerate docs/VALIDATION.md and docs/img/*
 | `cleaned/raw/` | Frozen pre-fix `allPrices.csv`/`allTrades.csv` |
 | `cleaned/` | Corrected prices/trades/analysis CSVs (generated by `prepare_data.py`, gitignored) |
 | `walkforward.py`, `checks.py` | Day-0 tuning / out-of-sample scoring; null, placebo and fill-stress checks |
-| `docs/PROTOCOL.md`, `docs/PROTOCOL-2.md`, `docs/tuned.json` | The evaluation protocols (declared before the experiments) and the day-0 picks |
+| `docs/PROTOCOL.md`, `docs/PROTOCOL-2.md`, `docs/PROTOCOL-3.md`, `docs/tuned.json` | The evaluation protocols (declared before the experiments) and the day-0 picks |
 | `legacy/` | The four superseded bots plus the original TraderC1.py, annotated |
 | `Background_and_Research/` | Pre-rebuild exploratory plots (`AshGraph.png`, `PepperGraph.png`) |
 | `docs/BACKGROUND.md` | Full writeup of the day-ordering bug and why it matters |
@@ -196,7 +218,7 @@ python validate.py                # regenerate docs/VALIDATION.md and docs/img/*
 
 ## Future interests
 
-- A mean-reversion test as the second leg of the regime switch (see Results).
+- A sturdier mean-reversion guard (persistence or a longer window) since the first one missed its random-walk bound (see Results).
 - Round 2+ products and the actual IMC conversions/observations mechanics,
   which this round didn't exercise (`datamodel.py` includes
   `ConversionObservation` for forward compatibility but nothing here uses it).

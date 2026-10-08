@@ -192,6 +192,22 @@ def standardDeviation(values):
     return math.sqrt(variance)
 
 
+def varianceRatioZ(mids, lag: int) -> float:
+    """Lo-MacKinlay z of VR(lag) for mid changes (zero-mean, overlapping, homoskedastic); 0 until the window is full.
+
+    Negative = mean reversion. See docs/PROTOCOL-3.md.
+    """
+    mids = list(mids)  # deque indexing is O(n)
+    n = len(mids) - 1
+    if lag < 2 or n < rollingWindow - 1:
+        return 0.0
+    var1 = sum((mids[i + 1] - mids[i]) ** 2 for i in range(n)) / n
+    if var1 == 0:
+        return 0.0
+    varK = sum((mids[i + lag] - mids[i]) ** 2 for i in range(n + 1 - lag)) / (n + 1 - lag)
+    return (varK / (lag * var1) - 1) / math.sqrt(2 * (2 * lag - 1) * (lag - 1) / (3 * lag * n))
+
+
 def chooseHalfSpread(state):
     bestDistance = 1
     bestScore = -1.0
@@ -222,6 +238,9 @@ class Strategy:
     skewScale = 1.0  # multiplies the inventory skew
     anchor = 0.0  # weight pulling fair value toward the mean of the last rollingWindow mids
     takeEdge = 0  # cross the book when the touch is this many ticks through fair value; 0 = never
+    guardLag = 0  # variance-ratio lag; anchor and taking engage only while VR(lag) is significantly < 1; 0 = no guard
+    guardThreshold = 0.0  # engaged while z < -guardThreshold (calibrated on random walks, docs/PROTOCOL-3.md)
+    guardFlat = False  # not engaged: True = unwind to flat, False = passive quoting without anchor or taking
 
     def quoteSize(self):
         return 10
@@ -243,9 +262,18 @@ class Strategy:
         if (bidPresent != askPresent) and not self.allowOneSidedQuote():
             return []
 
+        engaged = not self.guardLag or varianceRatioZ(state.mids, self.guardLag) < -self.guardThreshold
+        if not engaged and self.guardFlat:
+            if position > 0 and bestBid:
+                return [(bestBid, -min(position, self.quoteSize()))]
+            if position < 0 and bestAsk:
+                return [(bestAsk, min(-position, self.quoteSize()))]
+            return []
+        anchor, takeEdge = (self.anchor, self.takeEdge) if engaged else (0.0, 0)
+
         fairValue += self.fairValueShift(state)
-        if self.anchor and state.mids:
-            fairValue += self.anchor * (sum(state.mids) / len(state.mids) - fairValue)
+        if anchor and state.mids:
+            fairValue += anchor * (sum(state.mids) / len(state.mids) - fairValue)
 
         baseHalfSpread = self.width or chooseHalfSpread(state)
         halfSpread = baseHalfSpread + self.extraSpread(state)
@@ -284,11 +312,11 @@ class Strategy:
 
         orders = []
 
-        if self.takeEdge and bestAsk and bestAsk <= fairValue - self.takeEdge and roomToBuy > 0:
+        if takeEdge and bestAsk and bestAsk <= fairValue - takeEdge and roomToBuy > 0:
             takeSize = min(sizeCap, roomToBuy)
             orders.append((bestAsk, takeSize))
             roomToBuy -= takeSize
-        if self.takeEdge and bestBid and bestBid >= fairValue + self.takeEdge and roomToSell > 0:
+        if takeEdge and bestBid and bestBid >= fairValue + takeEdge and roomToSell > 0:
             takeSize = min(sizeCap, roomToSell)
             orders.append((bestBid, -takeSize))
             roomToSell -= takeSize

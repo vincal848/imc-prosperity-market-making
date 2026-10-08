@@ -59,3 +59,9 @@ planted mean-reverting OU series must engage it, a random walk must not
 If the guard costs all of the real-day edge, the README says so. Days 1-2 are
 not used to pick or tweak anything; if a criterion fails it is reported as
 failed, not retuned in this PR.
+
+## Calibration result (committed before any variant was scored)
+
+`python walkforward.py calibrate`: c_5 = 2.29 (0.8% false engagement on the
+independent seed set), c_20 = 1.979 (1.0%). Both within the declared 1% (the
+eligibility check allows up to 2x on sampling noise).

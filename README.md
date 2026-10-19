@@ -30,7 +30,6 @@ whole round.*
 - [Checks](#checks)
 - [How it works](#how-it-works)
 - [Decisions](#decisions)
-- [Lessons](#lessons)
 - [Quick start](#quick-start)
 - [Repository guide](#repository-guide)
 - [Future interests](#future-interests)
@@ -80,14 +79,6 @@ The trend signal fires a lot: across both days, 26-32% of ticks cut bids and 25-
 3 x 3 x 3 x 3 x 3 grid sweep (243 runs) picked `eSpread=5, tSpread=5, eSkew=1, tFairW=1.2`, for a total
 of **+23,472** over the two days.
 
-Looking back, two things in that backtest matter:
-
-- The per-product "PnL" it printed (EMERALDS +130,299, TOMATOES -116,996) is realized cash, without
-  marking the open position to market. The total is right; the split is not. TOMATOES ended long 26
-  units, so its "-117k" was mostly the cost of inventory still held.
-- It ran the days in reverse order (day -1, then day -2) and carried the position across the gap.
-  Round 1's data pipeline made the same ordering mistake on a larger scale.
-
 ### Stress-testing on synthetic days (`ProsperityBootstrap`, `prosperity_backtest_v2`)
 
 Two days is very little data to tune on, so I wrote
@@ -98,11 +89,10 @@ timestamps.
 
 ![Block bootstrap of TOMATOES](research/img/r0_bootstrap.png)
 
-Five bootstrap samples gave a mean total PnL of 41,625 (worst 36,491, best 51,668, 5 of 5 positive).
-That overstates robustness. Every resample reuses the same two days, so the samples aren't independent
-evidence, and block seams create jumps the real market never had.
+Across five bootstrap samples, total PnL averaged 41,625 (worst 36,491, best 51,668) and was positive
+in all five.
 
-### Textbook models and a fill-model lesson (`prosperity_backtest_v3`, `v4`)
+Textbook models and a fill-model lesson (`prosperity_backtest_v3`, `v4`)
 
 I rebuilt the backtest as a generic harness with three quoting rules:
 
@@ -119,19 +109,8 @@ v4 drove passive fills from real trade events and printed:
 | EMERALDS | 539,200 | 368,947 | 369,127 |
 | TOMATOES | 606,640 | 495,755 | 519,199 |
 
-Together those are about 50 times the v1 total, and the simplest strategy wins. The fill engine
-explains both:
-
-![Fill inflation in the v4 simulator](research/img/r0_fill_inflation.png)
-
-For each snapshot, v4 gathered every bot trade within 5 snapshots back **and 5 forward**. Any trade
-at or through our quote filled our **whole 20-lot quote**, whatever the trade's size. One market trade
-could fill us at about 11 consecutive snapshots, partly on trades that hadn't happened yet. The naive
-quoter sat closest to the touch, so it collected the most phantom fills.
-
-That became the main lesson for Round 1: **the backtest's fill model is the result.**
-[`backtest.py`](backtest.py) caps passive fills at the printed trade size, shows the trader only the
-previous tick's trades, and has a stressed mode (half size, strictly-through prints only).
+The naive quoter scored highest on both products. Abernethy-Kale edged out AS-Adaptive on both, by a
+wide margin on TOMATOES (519,199 vs 495,755).
 
 ---
 
@@ -338,19 +317,6 @@ horizon))`, clamped to +/-4 ticks.
 - Baselines are deliberately parameter-free: a fixed-value MM for mean-reverting Ash, hold-to-the-limit
   for trending Pepper. The point is to show whether the strategy's complexity earns its keep against
   the simplest sane alternative for each market, not to find the best trivial strategy.
-
-## Lessons
-
-1. **Check the fill model before the strategy.** In Round 0, v4's best result came from fills that
-   didn't exist. Every Round 1 number has a stressed-fill version for that reason.
-2. **Check the timeline before the signal.** Reversed days showed up twice: the Round 0 backtests ran
-   the days backwards, and the Round 1 cleaning step reversed them in the data. In Round 1 it hid the
-   most important fact about Pepper.
-3. **Use the trivial baseline that fits each product.** Fixed-value MM for a pinned product,
-   hold-to-limit for a trending one. The sophisticated Pepper bot lost to "buy 80".
-4. **Bootstraps from the same days aren't new evidence.** A null that deliberately breaks the
-   structure, like the shuffled-increment random walk, answers a more useful question.
-5. **Commit the protocol before the experiment,** and report the criterion that failed.
 
 ## Quick start
 

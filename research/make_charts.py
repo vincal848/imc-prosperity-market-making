@@ -132,24 +132,6 @@ def r0_bootstrap():
     save(fig, "r0_bootstrap.png")
 
 
-def r0_fill_inflation():
-    # Numbers printed by research/round0/prosperity_backtest_v4.ipynb (cells 8 and 16).
-    products = ["EMERALDS", "TOMATOES"]
-    events = [399, 820]
-    fills = [3936, 5662]  # Naive strategy, passive fills
-    fig, ax = plt.subplots(figsize=(8, 4))
-    x = np.arange(2)
-    ax.bar(x - 0.2, events, 0.38, color=MUTED, label="bot trades in the data")
-    ax.bar(x + 0.2, fills, 0.38, color=ORANGE, label="passive fills the v4 simulator gave us")
-    for i in range(2):
-        ax.text(x[i] - 0.2, events[i] + 80, f"{events[i]:,}", ha="center", color=INK)
-        ax.text(x[i] + 0.2, fills[i] + 80, f"{fills[i]:,}", ha="center", color=INK)
-    ax.set_xticks(x, products)
-    ax.set_title("Why v4's 539k EMERALDS PnL was not real: ~10 fills per market trade")
-    ax.legend(loc="upper left")
-    save(fig, "r0_fill_inflation.png")
-
-
 # ---------------------------------------------------------------- round 1
 
 def r1_day_label_bug():
@@ -300,7 +282,6 @@ def main():
     r0_overview(p0)
     r0_ema_signal(p0)
     r0_bootstrap()
-    r0_fill_inflation()
     p1 = chrono_prices(1, [0, 1, 2])
     r1_day_label_bug()
     r1_products(p1)

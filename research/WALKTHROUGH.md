@@ -171,7 +171,7 @@ TraderC1 was the final submission. It became `trader.py`.
 ### After the round: an honest backtest
 
 The rebuild (root README, [`docs/PROTOCOL*.md`](../docs)) fixed the day order, built `backtest.py`
-with the conservative fill model described above, and evaluated every change the same way: write
+(passive fills capped at the printed trade size, plus a stressed-fill mode), and evaluated every change the same way: write
 the protocol down first, tune on day 0 only, then score days 1 and 2 once. That's 43 variants in
 total across three protocols.
 

@@ -212,6 +212,7 @@ python validate.py                # regenerate docs/VALIDATION.md and docs/img/*
 | `docs/PROTOCOL.md`, `docs/PROTOCOL-2.md`, `docs/PROTOCOL-3.md`, `docs/tuned.json` | The evaluation protocols (declared before the experiments) and the day-0 picks |
 | `legacy/` | The four superseded bots plus the original TraderC1.py, annotated |
 | `Background_and_Research/` | Pre-rebuild exploratory plots (`AshGraph.png`, `PepperGraph.png`) |
+| `research/` | Early exploratory notebooks: round 0 bootstrap and backtests, round 1 cleaning, analysis, and dashboard (see `research/README.md`; data not included) |
 | `docs/BACKGROUND.md` | Full writeup of the day-ordering bug and why it matters |
 | `docs/VALIDATION.md` | Generated numbers (see `validate.py`) |
 | `tests/` | pytest suite, sentence-named, no network |

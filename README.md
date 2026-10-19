@@ -2,7 +2,7 @@
 
 [![tests](https://github.com/vincal848/imc-prosperity-market-making/actions/workflows/tests.yml/badge.svg)](https://github.com/vincal848/imc-prosperity-market-making/actions/workflows/tests.yml)
 
-This project came out of IMC Prosperity 2026 Round 1, a two-product market-making
+This project came out of IMC Prosperity 2026: a tutorial round (Round 0) and then Round 1, a two-product market-making
 round (ASH_COATED_OSMIUM and INTARIAN_PEPPER_ROOT, position limit 80). Across
 the round I wrote five versions of the trading bot, ending with TraderC1: an
 Avellaneda-Stoikov-flavored market maker with an empirically fit half spread
@@ -13,7 +13,7 @@ truncation-vs-rounding error in the fair-value clamp), fixed a reversed `day`
 label in the cleaned data that made Pepper's trend look like three
 disconnected sawtooths instead of one continuous line, and built a local
 backtester so the strategy's actual numbers are honest rather than assumed.
-****The headline finding is not flattering, and it got less flattering once the
+**The headline finding is not flattering, and it got less flattering once the
 comparison was made honest: on INTARIAN_PEPPER_ROOT a correct hold-to-the-limit
 baseline earns 239,471 XIRECS over the round versus 10,398 for the symmetric
 market maker (the earlier 26,955 baseline only ever held 9 units -- a bug).**
@@ -31,8 +31,44 @@ rise from 10,000 to 13,000, not the three-segment sawtooth in the original
 `Background_and_Research/PepperGraph.png`. Bottom: the trend is strong enough that just buying
 to the limit and holding beats the rebuilt market maker's PnL curve for the whole round.*
 
-For the whole story, from the Round 0 tutorial through this rebuild, with charts, see
-[`research/WALKTHROUGH.md`](research/WALKTHROUGH.md).
+## Round by round
+
+The full account, with 11 charts, is in [`research/WALKTHROUGH.md`](research/WALKTHROUGH.md). The short version:
+
+### Round 0 (tutorial): EMERALDS and TOMATOES
+
+EMERALDS was pinned at 10,000 (bots quoted 10,000 +/- 8 on 97% of ticks), so it got a fixed-fair-value
+market maker. TOMATOES drifted, so it got an EMA-trend fair value with z-score spread widening and
+trend-side size cuts. A 243-run grid sweep made +23,472 over the two days. To test robustness I wrote a
+block-bootstrap day generator ([`research/round0/ProsperityBootstrap.py`](research/round0/ProsperityBootstrap.py))
+and tried textbook quoting models (Avellaneda-Stoikov with live sigma/kappa/order flow, Abernethy-Kale
+spread learning). The last backtest reported 539,200 on EMERALDS for the naive quoter. That number came
+from the fill simulator, not the strategy:
+
+![v4 simulator fills vs actual market trades](research/img/r0_fill_inflation.png)
+
+It looked 5 snapshots ahead and filled the whole 20-lot quote on every nearby trade. That is why the
+Round 1 backtester caps fills at the printed size, only lets the trader see the previous tick's
+trades, and has a stressed-fill mode.
+
+### Round 1: ASH_COATED_OSMIUM and INTARIAN_PEPPER_ROOT
+
+The cleaning notebook ([`research/round1/clean_round1_data.ipynb`](research/round1/clean_round1_data.ipynb))
+overwrote the export's correct `day` column (-2, -1, 0) with the filename suffix (2, 1, 0), which
+reversed the days:
+
+![Pepper ordered by filename vs by the real day column](research/img/r1_day_label_bug.png)
+
+With the days in the right order, the two products are opposites. Ash mean-reverts at every horizon,
+and Pepper's ~1,000-per-day drift takes over past ~250 ticks:
+
+![Variance ratio by horizon](research/img/r1_variance_ratio.png)
+
+So the right benchmarks are a fixed 10,000 +/- 2 quoter for Ash and buy-80-and-hold for Pepper. The
+rebuilt Ash market maker beats its benchmark under both fill models. On Pepper, nothing tried beats
+holding (see Results).
+
+![Ash PnL vs the fixed-value baseline](research/img/r1_ash_pnl.png)
 
 ## At a glance
 

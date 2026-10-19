@@ -77,8 +77,8 @@ v4 added the trades files, used real trade events to drive passive fills, and pr
 | EMERALDS | 539,200 | 368,947 | 369,127 |
 | TOMATOES | 606,640 | 495,755 | 519,199 |
 
-The naive quoter scored highest on both products. Abernethy-Kale edged out AS-Adaptive on both, by a
-wide margin on TOMATOES (519,199 vs 495,755).
+The naive quoter scored highest on both products. Abernethy-Kale beat AS-Adaptive on both: by 180 on
+EMERALDS and by 23,444 on TOMATOES.
 
 ---
 

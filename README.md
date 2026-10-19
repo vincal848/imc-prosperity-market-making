@@ -31,6 +31,9 @@ rise from 10,000 to 13,000, not the three-segment sawtooth in the original
 `Background_and_Research/PepperGraph.png`. Bottom: the trend is strong enough that just buying
 to the limit and holding beats the rebuilt market maker's PnL curve for the whole round.*
 
+For the whole story, from the Round 0 tutorial through this rebuild, with charts, see
+[`research/WALKTHROUGH.md`](research/WALKTHROUGH.md).
+
 ## At a glance
 
 | | |
@@ -212,6 +215,7 @@ python validate.py                # regenerate docs/VALIDATION.md and docs/img/*
 | `docs/PROTOCOL.md`, `docs/PROTOCOL-2.md`, `docs/PROTOCOL-3.md`, `docs/tuned.json` | The evaluation protocols (declared before the experiments) and the day-0 picks |
 | `legacy/` | The four superseded bots plus the original TraderC1.py, annotated |
 | `Background_and_Research/` | Pre-rebuild exploratory plots (`AshGraph.png`, `PepperGraph.png`) |
+| `research/` | Round 0 and Round 1 notebooks, the raw IMC price/trade exports, and [`WALKTHROUGH.md`](research/WALKTHROUGH.md): a round-by-round account of the approach with charts |
 | `docs/BACKGROUND.md` | Full writeup of the day-ordering bug and why it matters |
 | `docs/VALIDATION.md` | Generated numbers (see `validate.py`) |
 | `tests/` | pytest suite, sentence-named, no network |
